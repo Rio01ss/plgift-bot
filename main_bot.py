@@ -23,6 +23,27 @@ from config import *
 
 logging.basicConfig(level=logging.INFO)
 
+# ========== UI/ТЕКСТЫ ==========
+PROFIT_LABB_BOT_LINK = "https://t.me/profitt_labb_bot"
+
+
+def quote_code(text: str) -> str:
+    """Цитата (как на скрине) + моноширинный блок для копирования."""
+    return f"<blockquote><code>{html.escape(text)}</code></blockquote>"
+
+
+async def try_react_heart(message: types.Message) -> None:
+    """Пробуем поставить реакцию ❤️ на сообщение со скрином (если поддерживается)."""
+    try:
+        reaction = [types.ReactionTypeEmoji(emoji="❤️")]
+        await bot.set_message_reaction(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reaction=reaction,
+        )
+    except Exception:
+        return
+
 # ========== БАЗА ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect('bot.db')
@@ -252,58 +273,18 @@ def add_notification(text):
     conn.commit()
     conn.close()
 
-# ========== 50 КОММЕНТАРИЕВ (лента TikTok, задание 2 — с отметкой бота) ==========
+# ========== КОММЕНТАРИИ (лента TikTok, задание 2 — с отметкой бота) ==========
 COMMENTS_50 = [
-    "Ребят, не спите — @PLGiftBot реально отдаёт подарки, гоните проверять 👇",
-    "Кто ещё сомневается — откройте @PLGiftBot и сами всё увидите, я уже в деле",
-    "Лайкните, если тоже любите халяву: я через @PLGiftBot забрал приз, попробуйте и вы",
-    "Забирай подарок, пока не поздно — @PLGiftBot работает без заморочек 🔥",
-    "Пишу под популярным роликом: @PLGiftBot выручает, кому актуально — вперёд по ссылке в профиле бота",
-    "Скиньте друзьям: @PLGiftBot, проверено лично, не развод",
-    "Если лень искать — начните с @PLGiftBot, дальше всё интуитивно",
-    "Кидаю всем в комменты: @PLGiftBot — топ по подаркам в Telegram",
-    "Хочешь так же? Тогда не тяни — @PLGiftBot ждёт тебя первым шагом",
-    "Мне пришло, значит и вам придёт — @PLGiftBot, не благодарите 😄",
-    "Ставь ❤️ и бегом в @PLGiftBot — там вся механика за пару минут",
-    "Без воды: @PLGiftBot сработал с первого захода, кому надо — забирайте",
-    "Кто в теме подарков в TG — загляните в @PLGiftBot, окупится с лихвой",
-    "Мой честный отзыв: @PLGiftBot выдал то, что обещал — дублируйте у себя",
-    "Не верьте слухам — проверьте @PLGiftBot сами, дальше решайте",
-    "Под этим видео оставлю метку @PLGiftBot — пусть люди не боятся пробовать",
-    "Коротко: @PLGiftBot = рабочая схема, осталось только сделать пару шагов",
-    "Кто пролистал до сюда — поздравляю, вы нашли @PLGiftBot, дальше проще",
-    "Забирай инструкцию в @PLGiftBot и повторяй за мной — у меня вышло",
-    "Для тех, кто «всё видел»: @PLGiftBot всё равно удивит, зайдите свежим взглядом",
-    "Тегаю @PLGiftBot, чтобы вы не потеряли — там реальные призы, не картинки",
-    "Листай ленту дальше, но сначала загляни в @PLGiftBot — потом скажешь спасибо",
-    "Подарок уже у меня в профиле — спасибо @PLGiftBot, дублируйте сценарий",
-    "Если вы тут за халявой — ваш маршрут: @PLGiftBot и пару минут внимания",
-    "Не скриньте только меня — сами пройдите путь в @PLGiftBot, так честнее",
-    "Кидаю якорь @PLGiftBot — кто хочет такой же результат, действуйте",
-    "Работает как заявлено: @PLGiftBot, без скрытых платежей и странных ссылок",
-    "Кто боится кидалова — смотрите на меня и на @PLGiftBot, всё прозрачно",
-    "Поставь лайк автору и загляни в @PLGiftBot — там вторая часть истории",
-    "Мне хватило одного вечера с @PLGiftBot — попробуйте выстроить свой темп",
-    "Делюсь находкой: @PLGiftBot, чтобы вы не гуглили часами",
-    "Если лень читать простыни — @PLGiftBot ведёт за руку, я прошёл",
-    "Короткий путь к призу — через @PLGiftBot, остальное приложится",
-    "Не откладывай на потом — @PLGiftBot сейчас в тренде, потом будет очередь",
-    "Отмечаю @PLGiftBot здесь, чтобы алгоритм показал тем, кому это зайдёт",
-    "Сделай скрин и отправь друзьям с упоминанием @PLGiftBot — пусть тоже заберут",
-    "Я не рекламщик, я пользователь: @PLGiftBot реально выручает",
-    "Кто ищет честный сервис подарков — ваш ориентир @PLGiftBot",
-    "Пишу вслух: @PLGiftBot, забирайте пока работает стабильно",
-    "Лента полна обещаний, а @PLGiftBot — про конкретику и шаги",
-    "Не верьте мне на слово — зайдите в @PLGiftBot и вернитесь с отзывом",
-    "Мой совет дня: начни с @PLGiftBot, потом расскажешь, как прошло",
-    "Кто любит быстрые победы — @PLGiftBot как раз про это",
-    "Оставляю метку @PLGiftBot под роликом, который залетит — пусть люди видят",
-    "Хочешь так же круто — повтори маршрут через @PLGiftBot",
-    "Без лишних слов: @PLGiftBot сработал, дальше за вами",
-    "Кому нужен живой кейс — я прошёл через @PLGiftBot, дублируйте",
-    "Тег @PLGiftBot для тех, кто всё ещё ищет «нормальный» бот подарков",
-    "Забирай сценарий: лайк автору + шаги в @PLGiftBot = результат",
-    "Пусть комменты не зря: @PLGiftBot — проверенная точка входа",
+    "хахах, работает… @PLGiftBot",
+    "лол, не воздухан оказывается 😄 @PLGiftBot",
+    "+ работает, проверил лично — @PLGiftBot",
+    "не верил, но сработало… @PLGiftBot",
+    "кто хочет так же — вот @PLGiftBot",
+    "плюсую, тема живая: @PLGiftBot",
+    "да, это реально: @PLGiftBot",
+    "без приколов, выдало: @PLGiftBot",
+    "не скам (я проверил): @PLGiftBot",
+    "если лень искать — держи: @PLGiftBot",
 ]
 
 # ========== РЕАЛЬНЫЕ ПОДАРКИ TELEGRAM ==========
@@ -481,6 +462,9 @@ _step2_mg_counts: dict[tuple[int, int], int] = {}
 _step2_mg_last_message: dict[tuple[int, int], types.Message] = {}
 _step2_mg_tasks: dict[tuple[int, int], asyncio.Task] = {}
 
+# Прогресс шага 2: держим один “прогресс-месседж” и обновляем его, а при переходе — удаляем
+_step2_progress_message_id: dict[int, int] = {}
+
 
 async def _run_step2_after_photos(
     answer_message: types.Message, state: FSMContext, user_id: int, delta: int
@@ -495,12 +479,34 @@ async def _run_step2_after_photos(
 
     if new_count < REQUIRED_FEED_SCREENSHOTS:
         remaining = REQUIRED_FEED_SCREENSHOTS - new_count
-        await answer_message.answer(
-            f"Получено {new_count}/{REQUIRED_FEED_SCREENSHOTS}. "
-            f"Отправь ещё {ru_n_screenshots(remaining)}.",
-            parse_mode=ParseMode.HTML,
+        text = (
+            f"<blockquote>Получено <b>{new_count} из {REQUIRED_FEED_SCREENSHOTS}</b>.\n"
+            f"Отправь ещё <b>{html.escape(ru_n_screenshots(remaining))}</b>.</blockquote>"
         )
+        prev_id = _step2_progress_message_id.get(user_id)
+        if prev_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=answer_message.chat.id,
+                    message_id=prev_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                msg = await answer_message.answer(text, parse_mode=ParseMode.HTML)
+                _step2_progress_message_id[user_id] = msg.message_id
+        else:
+            msg = await answer_message.answer(text, parse_mode=ParseMode.HTML)
+            _step2_progress_message_id[user_id] = msg.message_id
         return
+
+    # Достигли цели: удаляем прошлый прогресс
+    prev_id = _step2_progress_message_id.pop(user_id, None)
+    if prev_id:
+        try:
+            await bot.delete_message(chat_id=answer_message.chat.id, message_id=prev_id)
+        except Exception:
+            pass
 
     update_user(user_id, step=3)
     await state.set_state(Funnel.subscribed)
@@ -616,7 +622,7 @@ async def send_step_hint(message_or_callback, db_user):
     elif step == 1:
         text = "📩 <b>Жду скриншот первого комментария.</b>"
         if comment:
-            text += f"\n\nТекст для комментария (скопируй одним нажатием):\n<code>{html.escape(comment)}</code>"
+            text += f"\n\nТекст (скопируй):\n{quote_code(comment)}"
         await send(text, parse_mode=ParseMode.HTML)
     elif step == 2:
         text = (
@@ -624,7 +630,7 @@ async def send_step_hint(message_or_callback, db_user):
             f"(нужно {REQUIRED_FEED_SCREENSHOTS} скриншотов, можно альбомом).</b>"
         )
         if comment:
-            text += f"\n\nТекст с отметкой бота (скопируй одним нажатием):\n<code>{html.escape(comment)}</code>"
+            text += f"\n\nТекст (скопируй):\n{quote_code(comment)}"
         await send(text, parse_mode=ParseMode.HTML)
     elif step == 3:
         await send(
@@ -777,56 +783,16 @@ async def show_gift(callback: types.CallbackQuery):
 
 # ========== 50 фраз для благодарности под исходным комментарием (задание 1) ==========
 RANDOM_COMMENTS_50 = [
-    "Спасибо за наводку — полез сюда по твоему комменту, уже забрал свой подарок 🔥",
-    "Лайк поставил и пошёл по ссылке: всё сработало, как ты и писал — респект автору коммента",
-    "Не зря пролистал до тебя: твой отзыв оказался правдой, делюсь тем же с другими",
-    "Забираю подарок и возвращаюсь с благодарностью — кто сомневается, пусть повторит мой путь",
-    "Твой коммент спас меня от сомнений: прошёл по инструкции и не пожалел, кидаю плюс в ленту",
-    "Оставляю тут короткое «спасибо» — без твоего сообщения я бы прошёл мимо",
-    "Работает один в один, как ты описал: лайк тебе и удачи в ленте",
-    "Скинул друзьям твой тред — пусть тоже попробуют, у меня всё вышло с первого раза",
-    "Честно, думал развод — проверил лично, всё ок, спасибо что подсветил тему",
-    "Забираю приз и оставляю след в комментах: пусть алгоритм поднимет полезный отзыв выше",
-    "Ты молодец, что не жадничаешь инфой — я повторил шаги и получил результат",
-    "Поставил сердечко и написал, как просили: дальше только вперёд за подарками",
-    "Коротко и по делу — твой коммент сработал как стартовый сигнал, полет нормальный",
-    "Если кто читает цепочку — не ленитесь, повторите сценарий, у меня сработало",
-    "Лайк автору и плюс в карму: на твоём пути реально можно выиграть время",
-    "Вернулся с подтверждением — не фейк, не картинка из интернета, всё по-взрослому",
-    "Пусть этот коммент поднимут: тут правда, а не очередная сказка про «лёгкие деньги»",
-    "Забираю бонус и оставляю благодарность — пусть люди видят живой кейс",
-    "Ты подсветил рабочую схему — я прошёл её и советую не тянуть с регистрацией",
-    "Не верил до последнего — теперь сам пишу под роликом, чтобы другие не боялись",
-    "Сделал как в инструкции под твоим постом: всё чисто, без скрытых условий",
-    "Кидаю «спасибо» вслух — без твоего сообщения я бы так и остался в сомнениях",
-    "Лента полна воды, а тут конкретика — повторил и получил то, что обещали",
-    "Поставил лайк и забрал подарок — возвращаюсь с отчётом, как просили ветку",
-    "Твой совет окупился за пару минут — делюсь им дальше по комментариям",
-    "Оставляю след под видео: пусть кто сомневается, увидит ещё один живой отзыв",
-    "Работает стабильно — лайк тебе и удачи, кто дочитал, тот уже в теме",
-    "Забираю приз и не жадничаю словами — правда рабочая, проверено сегодня",
-    "Ты сэкономил мне часы поисков — отблагодарил лайком и короткой фразой здесь",
-    "Пусть модерация не удалит: тут реальный опыт, а не рекламная простыня",
-    "Сделал по твоему маршруту — всё легло в голову, спасибо за честный сигнал",
-    "Не скринь только меня — сами пройдите шаги, у меня без сюрпризов",
-    "Лайк и короткое «реально работает» — больше добавить нечего, всё по факту",
-    "Твой коммент стоил того, чтобы остановить скролл — результат уже у меня",
-    "Возвращаюсь с благодарностью: кто ищет нормальный способ, тот найдёт по твоим словам",
-    "Поставил плюс автору и пошёл дальше по цепочке — цель выполнена, подарок у меня",
-    "Коротко: сработало, как ты написал — пусть коммент не утонет, это полезно",
-    "Забираю награду и оставляю добрый след — пусть лента покажет это тем, кто в поиске",
-    "Ты не зря старался в комменте — я проверил и подтверждаю каждое слово",
-    "Лайк тебе и удачи в рекомендациях — пусть больше людей увидят рабочую подсказку",
-    "Сделал всё по инструкции из твоего сообщения — возвращаюсь с «спасибо» и плюсом",
-    "Не развод, проверено лично — оставляю это здесь, чтобы цепочка была длиннее",
-    "Твой отзыв сработал как трамплин — я уже с призом, остальным тоже советую",
-    "Поставил лайк и написал коротко: правда, работает, иду дальше по воронке",
-    "Забираю подарок и фиксирую благодарность — пусть автор видит, что не зря старался",
-    "Кто читает ветку до конца — не бойтесь, повторите действия, у меня без подвоха",
-    "Ты подсветил нормальный вход в тему — я прошёл и возвращаюсь с подтверждением",
-    "Лайк и уважение: без твоего коммента я бы так и гонял сомнения в голове",
-    "Короткий отчёт: всё честно, шаги простые — спасибо, что не жадничаешь инфой",
-    "Оставляю метку под роликом — пусть алгоритм покажет тем, кто тоже ищет халяву",
+    "хахах, работает… спасибо 😄",
+    "лол, думал воздухан — а оно реально",
+    "+ работает, лайк автору",
+    "не верил, но сработало… респект",
+    "плюсую, тема живая — спасибо",
+    "проверил(а) лично — всё ок",
+    "коротко: работает. спасибо",
+    "не скам (проверено) — благодарю",
+    "сработало, забрал(а) — спасибо",
+    "всё честно, без приколов — спасибо",
 ]
 
 @dp.callback_query(F.data == "step1_comment")
@@ -836,19 +802,18 @@ async def step1_comment(callback: types.CallbackQuery):
     comment = random.choice(RANDOM_COMMENTS_50)
     update_user(user_id, step=1, comment_text=comment)
 
-    c_html = html.escape(comment)
     await callback.message.answer(
         f"📊 <b>Шаг 1 из 3</b>  ⬜⬜⬜\n\n"
-        f"📥 <b>Для получения необходимо:</b>\n\n"
-        f"1️⃣ Написать под комментарием, с которого узнал о нас, такой текст "
-        f"(скопируй одним нажатием) и поставь лайк:\n<code>{c_html}</code>\n\n"
-        f"📩 <b>Отправь боту скриншот выполнения</b>",
+        f"1️⃣ Напиши под тем комментом, откуда узнал о нас, вот это (скопируй):\n"
+        f"{quote_code(comment)}\n\n"
+        f"Поставь лайк и скинь сюда скриншот ✅",
         parse_mode=ParseMode.HTML
     )
 
 @dp.message(F.photo, Funnel.gift_shown)
 async def screenshot_step1(message: types.Message, state: FSMContext):
     """Шаг 1 → Шаг 2: получили скрин первого комментария."""
+    await try_react_heart(message)
     user_id = message.from_user.id
     user = get_user(user_id)
     if not user:
@@ -868,23 +833,19 @@ async def screenshot_step1(message: types.Message, state: FSMContext):
         f"Текст: {step1_comment}"
     )
 
-    bc_html = html.escape(bot_comment)
     await message.answer(
         f"📊 <b>Шаг 2 из 3</b>  ✅⬜⬜\n\n"
-        f"✅ <b>Скриншот получен!</b>\n\n"
-        f"2️⃣ Теперь зайди в <b>ленту TikTok (For You)</b>, найди <b>популярные видео</b> "
-        f"(с большим количеством лайков/просмотров) и под каждым напиши комментарий "
-        f"<b>с отметкой нашего бота</b>. Скопируй текст одним нажатием:\n\n"
-        f"<code>{bc_html}</code>\n\n"
-        f"💡 <i>Совет: ищи видео на тему подарков, халявы, Telegram — там твоя аудитория</i>\n\n"
-        f"📩 <b>Отправь {REQUIRED_FEED_SCREENSHOTS} скриншотов</b> "
-        f"(можно одним альбомом — каждый кадр засчитается; бот ответит один раз на весь альбом)",
+        f"✅ <b>Принял!</b>\n\n"
+        f"2️⃣ Теперь в ленте TikTok найди популярные видео и оставь коммент с отметкой бота.\n"
+        f"Текст (скопируй):\n{quote_code(bot_comment)}\n\n"
+        f"📩 Скинь <b>{REQUIRED_FEED_SCREENSHOTS}</b> скринов (можно альбомом).",
         parse_mode=ParseMode.HTML
     )
 
 @dp.message(F.photo, Funnel.feed_comments)
 async def screenshot_step2(message: types.Message, state: FSMContext):
     """Шаг 2: счётчик скринов в БД; альбом — несколько фото, одно ответное сообщение."""
+    await try_react_heart(message)
     user_id = message.from_user.id
     user = get_user(user_id)
     if not user:
@@ -955,12 +916,17 @@ async def finalize_funnel(user_id: int, username: str | None, state: FSMContext,
         [InlineKeyboardButton(text="🎲 Бросить ещё раз", callback_data="play_again")],
     ]
 
-    if SPONSOR_LINKS:
-        text += f"\n\n🎁 <b>Бонус от спонсора:</b>\nПолучи дополнительные призы!"
+    sponsor_links: list[str] = [PROFIT_LABB_BOT_LINK, *(SPONSOR_LINKS or [])]
+    sponsor_links = list(dict.fromkeys([l for l in sponsor_links if l]))
+
+    if sponsor_links:
+        text += "\n\n🎁 <b>Бонусы:</b>\nЗапусти бота и забери дополнительные призы!"
         sponsor_block: list[list[InlineKeyboardButton]] = []
-        for i, link in enumerate(SPONSOR_LINKS):
-            label = "🎁 Бонус от спонсора" if len(SPONSOR_LINKS) == 1 else f"🎁 Спонсор {i + 1}"
-            sponsor_block.append([InlineKeyboardButton(text=label, url=link)])
+        for link in sponsor_links:
+            if "t.me/profitt_labb_bot" in link:
+                sponsor_block.append([InlineKeyboardButton(text="Запустить бота", url=link)])
+            else:
+                sponsor_block.append([InlineKeyboardButton(text="🎁 Бонус от спонсора", url=link)])
         keyboard = sponsor_block + keyboard
 
     await send(
@@ -1025,6 +991,7 @@ async def on_chat_join_request(join: ChatJoinRequest):
 @dp.message(F.photo, Funnel.subscribed)
 async def screenshot_step3(message: types.Message, state: FSMContext):
     """Шаг 3 → Финал: проверяем подписку и завершаем воронку (по скриншоту)."""
+    await try_react_heart(message)
     user_id = message.from_user.id
     is_member = await check_force_sub_satisfied(user_id)
 
