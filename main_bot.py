@@ -28,21 +28,18 @@ PROFIT_LABB_BOT_LINK = "https://t.me/profitt_labb_bot"
 
 
 def quote_code(text: str) -> str:
-    """Цитата (как на скрине) + моноширинный блок для копирования."""
     return f"<blockquote><code>{html.escape(text)}</code></blockquote>"
 
 
 async def try_react_heart(message: types.Message) -> None:
-    """Пробуем поставить реакцию ❤️ на сообщение со скрином (если поддерживается)."""
     try:
-        reaction = [types.ReactionTypeEmoji(emoji="❤️")]
         await bot.set_message_reaction(
             chat_id=message.chat.id,
             message_id=message.message_id,
-            reaction=reaction,
+            reaction=[types.ReactionTypeEmoji(emoji="❤")],
         )
     except Exception:
-        return
+        pass
 
 # ========== БАЗА ДАННЫХ ==========
 def init_db():
@@ -59,7 +56,9 @@ def init_db():
         screenshots_count INTEGER DEFAULT 0,
         joined_channel INTEGER DEFAULT 0,
         created_at TEXT,
-        last_active TEXT
+        last_active TEXT,
+        invited_count INTEGER DEFAULT 0,
+        stars_rewarded INTEGER DEFAULT 0
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS stats (
@@ -102,11 +101,24 @@ def init_db():
         PRIMARY KEY (user_id, channel_id)
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS referrals (
+        referrer_id INTEGER NOT NULL,
+        referred_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (referred_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS sponsors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL,
+        url TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )''')
+
     conn.commit()
     conn.close()
 
 def init_gifts(defaults: dict):
-    """Засевает таблицу gifts из defaults, только если она пустая."""
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM gifts")
@@ -137,7 +149,6 @@ def _row_to_gift(row) -> dict:
     return g
 
 def get_gift(slot: int) -> dict:
-    """Возвращает подарок из БД для slot (1-6). Если нет — slot 1 как fallback."""
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     c.execute("SELECT * FROM gifts WHERE slot=?", (slot,))
@@ -157,7 +168,6 @@ def get_all_gifts() -> list[dict]:
     return [_row_to_gift(r) for r in rows]
 
 def update_gift_slug_number(slot: int, slug: str, number: int) -> bool:
-    """Обновляет slug + номер подарка в slot. Возвращает True если что-то обновилось."""
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     c.execute("UPDATE gifts SET slug=?, number=? WHERE slot=?", (slug, number, slot))
@@ -191,29 +201,62 @@ def get_user(user_id):
     conn.close()
     return user
 
-def add_user(user_id, username, first_name):
+def add_user(user_id, username, first_name, referrer_id=None):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     now = datetime.now().isoformat()
-    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, created_at, last_active) VALUES (?,?,?,?,?)",
-              (user_id, username, first_name, now, now))
-    today = datetime.now().strftime("%Y-%m-%d")
-    c.execute("INSERT INTO stats (date, new_users) VALUES (?, 1) ON CONFLICT(date) DO UPDATE SET new_users=new_users+1",
-              (today,))
+    is_new = False
+    c.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+    if not c.fetchone():
+        is_new = True
+        c.execute(
+            "INSERT INTO users (user_id, username, first_name, created_at, last_active) VALUES (?,?,?,?,?)",
+            (user_id, username, first_name, now, now)
+        )
+        today = datetime.now().strftime("%Y-%m-%d")
+        c.execute(
+            "INSERT INTO stats (date, new_users) VALUES (?, 1) ON CONFLICT(date) DO UPDATE SET new_users=new_users+1",
+            (today,)
+        )
+        if referrer_id and referrer_id != user_id:
+            c.execute(
+                "INSERT OR IGNORE INTO referrals (referrer_id, referred_id, created_at) VALUES (?,?,?)",
+                (referrer_id, user_id, now)
+            )
+            c.execute(
+                "UPDATE users SET invited_count = COALESCE(invited_count,0) + 1 WHERE user_id=?",
+                (referrer_id,)
+            )
     conn.commit()
     conn.close()
+    return is_new
+
+def get_invited_count(user_id: int) -> int:
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute("SELECT invited_count FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return int(row[0]) if row and row[0] else 0
+
+def get_all_completed_users() -> list[int]:
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE step >= 4")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 def update_user(user_id, **kwargs):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     for key, value in kwargs.items():
-        c.execute(f"UPDATE users SET {key}=?, last_active=? WHERE user_id=?", 
+        c.execute(f"UPDATE users SET {key}=?, last_active=? WHERE user_id=?",
                   (value, datetime.now().isoformat(), user_id))
     conn.commit()
     conn.close()
 
 def increment_feed_screenshot_count_by(user_id: int, delta: int) -> int:
-    """Атомарно +delta к счётчику скринов шага 2 (альбомом приходит несколько фото — одним пакетом)."""
     if delta <= 0:
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
@@ -225,8 +268,7 @@ def increment_feed_screenshot_count_by(user_id: int, delta: int) -> int:
     c = conn.cursor()
     now = datetime.now().isoformat()
     c.execute(
-        "UPDATE users SET screenshots_count = COALESCE(screenshots_count, 0) + ?, last_active = ? "
-        "WHERE user_id = ?",
+        "UPDATE users SET screenshots_count = COALESCE(screenshots_count, 0) + ?, last_active = ? WHERE user_id = ?",
         (delta, now, user_id),
     )
     c.execute("SELECT screenshots_count FROM users WHERE user_id = ?", (user_id,))
@@ -256,6 +298,15 @@ def has_channel_join_request(user_id: int, channel_id: int) -> bool:
     conn.close()
     return ok
 
+def get_sponsor_links() -> list[tuple[str, str]]:
+    """Возвращает список (label, url) спонсоров из БД."""
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute("SELECT label, url FROM sponsors ORDER BY id")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def increment_stat(field):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -273,24 +324,21 @@ def add_notification(text):
     conn.commit()
     conn.close()
 
-# ========== КОММЕНТАРИИ (лента TikTok, задание 2 — с отметкой бота) ==========
+# ========== КОММЕНТАРИИ шаг 2 ==========
 COMMENTS_50 = [
-    "хахах, работает… @PLGiftBot",
-    "лол, не воздухан оказывается 😄 @PLGiftBot",
-    "+ работает, проверил лично — @PLGiftBot",
-    "не верил, но сработало… @PLGiftBot",
-    "кто хочет так же — вот @PLGiftBot",
-    "плюсую, тема живая: @PLGiftBot",
-    "да, это реально: @PLGiftBot",
-    "без приколов, выдало: @PLGiftBot",
-    "не скам (я проверил): @PLGiftBot",
-    "если лень искать — держи: @PLGiftBot",
+    "хахах работает @PLGiftBot",
+    "лол не воздухан оказывается @PLGiftBot",
+    "работает проверил лично @PLGiftBot",
+    "не верил но сработало @PLGiftBot",
+    "кто хочет так же вот @PLGiftBot",
+    "плюсую тема живая @PLGiftBot",
+    "да это реально @PLGiftBot",
+    "без приколов выдало @PLGiftBot",
+    "не скам я проверил @PLGiftBot",
+    "если лень искать держи @PLGiftBot",
 ]
 
-# ========== РЕАЛЬНЫЕ ПОДАРКИ TELEGRAM ==========
-# ВАЖНО: чтобы Telegram нарисовал большую карточку подарка из ссылки t.me/nft/...,
-# КОМБИНАЦИЯ <Name>-<Number> ДОЛЖНА реально существовать на Telegram.
-# Иначе превью будет пустым/обычным. Snoop Dogg #412744 — подтверждённый рабочий пример.
+# ========== ПОДАРКИ ==========
 DEFAULT_GIFTS = {
     1: {
         "name": "Jelly Bunny",
@@ -348,7 +396,7 @@ DEFAULT_GIFTS = {
         "rarity_bg": "1.2%",
         "total": 581059,
         "issued": 593781,
-        "value": "~1 033,00 UAH",
+        "value": "~1 033 UAH",
         "emoji": "🐕",
         "slug": "SnoopDogg",
     },
@@ -387,8 +435,6 @@ DEFAULT_GIFTS = {
 for _g in DEFAULT_GIFTS.values():
     _g["gift_link"] = f"https://t.me/nft/{_g['slug']}-{_g['number']}"
 
-# Создаём таблицы и засеваем подарки на module load,
-# чтобы admin_bot мог читать их сразу при импорте.
 init_db()
 init_gifts(DEFAULT_GIFTS)
 
@@ -397,13 +443,13 @@ bot = Bot(token=MAIN_BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# ========== FSM СОСТОЯНИЯ ==========
+# ========== FSM ==========
 class Funnel(StatesGroup):
-    start = State()          # step 0 — ещё не бросал кубик
-    gift_shown = State()     # step 1 — нужно прислать скрин первого комментария
-    feed_comments = State()  # step 2 — нужно прислать скрины комментов в ленте
-    subscribed = State()     # step 3 — нужно прислать скрин подписки на канал
-    completed = State()      # step 4 — всё пройдено
+    start = State()
+    gift_shown = State()
+    feed_comments = State()
+    subscribed = State()
+    completed = State()
 
 STEP_TO_STATE = {
     0: Funnel.start,
@@ -414,9 +460,6 @@ STEP_TO_STATE = {
 }
 
 class StateSyncMiddleware(BaseMiddleware):
-    """Синхронизирует FSM-состояние пользователя с шагом из БД на каждом апдейте.
-    Это нужно, чтобы перезапуск бота (MemoryStorage сбрасывается) не ломал воронку.
-    """
     async def __call__(self, handler, event, data):
         state: FSMContext = data.get("state")
         user_obj = None
@@ -436,12 +479,10 @@ class StateSyncMiddleware(BaseMiddleware):
 dp.message.middleware(StateSyncMiddleware())
 dp.callback_query.middleware(StateSyncMiddleware())
 
-# ========== Шаг 2 воронки (скрины из ленты) ==========
+# ========== ШАГ 2 альбомы ==========
 REQUIRED_FEED_SCREENSHOTS = 5
 
-
 def ru_n_screenshots(n: int) -> str:
-    """Число + слово «скриншот» с правильным склонением (2 скриншота, 5 скриншотов)."""
     n_abs = abs(n) % 100
     n1 = n_abs % 10
     if 11 <= n_abs <= 19:
@@ -454,22 +495,17 @@ def ru_n_screenshots(n: int) -> str:
         word = "скриншотов"
     return f"{n} {word}"
 
-
-# Альбом (media_group): ждём короткую паузу, считаем все фото пакетом — одно сообщение от бота
 STEP2_MEDIA_GROUP_FLUSH_SEC = 0.85
 _step2_mg_lock = asyncio.Lock()
 _step2_mg_counts: dict[tuple[int, int], int] = {}
 _step2_mg_last_message: dict[tuple[int, int], types.Message] = {}
 _step2_mg_tasks: dict[tuple[int, int], asyncio.Task] = {}
-
-# Прогресс шага 2: держим один “прогресс-месседж” и обновляем его, а при переходе — удаляем
 _step2_progress_message_id: dict[int, int] = {}
 
 
 async def _run_step2_after_photos(
     answer_message: types.Message, state: FSMContext, user_id: int, delta: int
 ) -> None:
-    """Учёт delta скриншотов шага 2 и одно ответное сообщение (для альбома delta > 1)."""
     user = get_user(user_id)
     if not user:
         await answer_message.answer("❌ Сначала нажми /start")
@@ -480,8 +516,8 @@ async def _run_step2_after_photos(
     if new_count < REQUIRED_FEED_SCREENSHOTS:
         remaining = REQUIRED_FEED_SCREENSHOTS - new_count
         text = (
-            f"<blockquote>Получено <b>{new_count} из {REQUIRED_FEED_SCREENSHOTS}</b>.\n"
-            f"Отправь ещё <b>{html.escape(ru_n_screenshots(remaining))}</b>.</blockquote>"
+            f"<blockquote>Получено <b>{new_count} из {REQUIRED_FEED_SCREENSHOTS}</b>\n"
+            f"Отправь ещё <b>{html.escape(ru_n_screenshots(remaining))}</b></blockquote>"
         )
         prev_id = _step2_progress_message_id.get(user_id)
         if prev_id:
@@ -500,7 +536,6 @@ async def _run_step2_after_photos(
             _step2_progress_message_id[user_id] = msg.message_id
         return
 
-    # Достигли цели: удаляем прошлый прогресс
     prev_id = _step2_progress_message_id.pop(user_id, None)
     if prev_id:
         try:
@@ -513,20 +548,23 @@ async def _run_step2_after_photos(
     increment_stat("step2_done")
 
     add_notification(
-        f"💬 Комментарии в ленте (шаг 2)!\n"
-        f"ID: {user_id}\n"
-        f"Юзер: @{answer_message.from_user.username or 'нет'}\n"
-        f"Скринов: {new_count}"
+        f"Комментарии в ленте шаг 2\n"
+        f"ID {user_id}\n"
+        f"Юзер @{answer_message.from_user.username or 'нет'}\n"
+        f"Скринов {new_count}"
     )
+
+    me = await bot.get_me()
 
     await answer_message.answer(
         f"📊 <b>Шаг 3 из 3</b>  ✅✅⬜\n\n"
-        f"✅ <b>Отлично! Осталось последнее действие</b>\n\n"
-        f"3️⃣ Подпишись на закрытый канал (или подай заявку на вступление — бот это засчитает):\n"
-        f"👇 <code>{html.escape(CHANNEL_LINK)}</code>\n\n"
-        f"После подписки или подачи заявки нажми <b>«✅ Я подписался»</b> — "
-        f"я сам проверю и зачислю тебе награду.\n"
-        f"Можно также прислать скриншот подписки.",
+        f"✅ <b>Отлично осталось последнее</b>\n\n"
+        f"3️⃣ Запусти бота и подпишись на закрытый канал\n\n"
+        f"👇 Запусти бота:\n"
+        f"<a href='{PROFIT_LABB_BOT_LINK}'>@profitt_labb_bot</a>\n\n"
+        f"🔐 Подпишись на канал:\n"
+        f"<code>{html.escape(CHANNEL_LINK)}</code>\n\n"
+        f"После выполни оба действия и нажми <b>Я подписался</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=subscription_reply_markup(),
     )
@@ -547,7 +585,6 @@ async def _flush_step2_media_group(key: tuple[int, int], state: FSMContext) -> N
 
 
 async def schedule_step2_media_group(message: types.Message, state: FSMContext) -> None:
-    """Накапливает фото одного альбома; после паузы без новых частей — один ответ."""
     assert message.media_group_id is not None
     key = (message.from_user.id, message.media_group_id)
     async with _step2_mg_lock:
@@ -560,8 +597,8 @@ async def schedule_step2_media_group(message: types.Message, state: FSMContext) 
 
 
 def subscription_reply_markup() -> InlineKeyboardMarkup:
-    """Кнопки: основной канал, резервные по ссылкам из конфига, проверка подписки."""
     rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🤖 Запустить бота", url=PROFIT_LABB_BOT_LINK)],
         [InlineKeyboardButton(text="🔐 Подписаться на канал", url=CHANNEL_LINK)],
     ]
     for idx, link in enumerate(CHANNEL_BACKUP_LINKS, start=1):
@@ -577,35 +614,28 @@ def subscription_reply_markup() -> InlineKeyboardMarkup:
 # ========== ПРОВЕРКА ПОДПИСКИ ==========
 ALLOWED_MEMBER_STATUSES = {"member", "administrator", "creator"}
 
+async def check_bot_started(user_id: int) -> bool:
+    """Проверяем запустил ли пользователь profitt_labb_bot через попытку отправить сообщение."""
+    try:
+        await bot.send_chat_action(chat_id=user_id, action="typing")
+        return True
+    except Exception:
+        return False
+
 async def check_force_sub_satisfied(user_id: int) -> bool:
-    """True, если пользователь member/admin/creator в одном из каналов Force Sub
-    ИЛИ зафиксирована заявка на вступление (chat_join_request) в этот канал.
-    """
     for cid in FORCE_SUB_CHANNEL_IDS:
         try:
             member = await bot.get_chat_member(chat_id=cid, user_id=user_id)
             if member.status in ALLOWED_MEMBER_STATUSES:
-                logging.info(
-                    f"check_force_sub user={user_id} channel={cid} status={member.status} ok=True"
-                )
                 return True
         except Exception as e:
-            logging.error(
-                f"Ошибка get_chat_member user={user_id} channel={cid}: {e}. "
-                f"Убедись, что бот — админ канала."
-            )
+            logging.error(f"get_chat_member user={user_id} channel={cid}: {e}")
         if has_channel_join_request(user_id, cid):
-            logging.info(
-                f"check_force_sub user={user_id} channel={cid} ok=True (join_request pending)"
-            )
             return True
-
-    logging.info(f"check_force_sub user={user_id} ok=False channels={FORCE_SUB_CHANNEL_IDS}")
     return False
 
-# ========== ХЕЛПЕР: ПОДСКАЗКА ПО ТЕКУЩЕМУ ШАГУ ==========
+# ========== ПОДСКАЗКА ПО ШАГУ ==========
 async def send_step_hint(message_or_callback, db_user):
-    """Отправляет подсказку, что пользователь должен сделать сейчас."""
     if isinstance(message_or_callback, types.CallbackQuery):
         send = message_or_callback.message.answer
     else:
@@ -615,67 +645,86 @@ async def send_step_hint(message_or_callback, db_user):
     comment = db_user[5] if db_user else None
 
     if step == 0:
-        await send(
-            "🎁 <b>Начни с броска кубика — нажми /start</b>",
-            parse_mode=ParseMode.HTML,
-        )
+        await send("🎁 <b>Начни с броска кубика — нажми /start</b>", parse_mode=ParseMode.HTML)
     elif step == 1:
-        text = "📩 <b>Жду скриншот первого комментария.</b>"
+        text = "📩 <b>Жду скриншот первого комментария</b>"
         if comment:
             text += f"\n\nТекст (скопируй):\n{quote_code(comment)}"
         await send(text, parse_mode=ParseMode.HTML)
     elif step == 2:
         text = (
             f"📩 <b>Жду скриншоты комментов из ленты TikTok "
-            f"(нужно {REQUIRED_FEED_SCREENSHOTS} скриншотов, можно альбомом).</b>"
+            f"({REQUIRED_FEED_SCREENSHOTS} скриншотов можно альбомом)</b>"
         )
         if comment:
             text += f"\n\nТекст (скопируй):\n{quote_code(comment)}"
         await send(text, parse_mode=ParseMode.HTML)
     elif step == 3:
         await send(
-            "📩 <b>Жду подтверждения: подписка или заявка в один из наших каналов.</b>\n"
-            f"👇 <code>{html.escape(CHANNEL_LINK)}</code>",
+            "📩 <b>Жду подтверждения — запусти бота и подпишись на канал</b>\n"
+            f"🤖 {PROFIT_LABB_BOT_LINK}\n"
+            f"🔐 <code>{html.escape(CHANNEL_LINK)}</code>",
             parse_mode=ParseMode.HTML,
             reply_markup=subscription_reply_markup(),
         )
     elif step >= 4:
-        await send(
-            "🎉 <b>Ты уже всё прошёл!</b> Жди розыгрыша.",
-            parse_mode=ParseMode.HTML,
-        )
+        await send("🎉 <b>Ты уже всё прошёл</b> Жди розыгрыша", parse_mode=ParseMode.HTML)
 
-# ========== ОБРАБОТЧИКИ ==========
+# ========== ТАЙМЕР ==========
+MSK_TZ = timezone(timedelta(hours=3))
+DRAW_HOUR_MSK = 21
 
+def next_draw_dt() -> datetime:
+    now = datetime.now(MSK_TZ)
+    today_draw = now.replace(hour=DRAW_HOUR_MSK, minute=0, second=0, microsecond=0)
+    if now >= today_draw:
+        return today_draw + timedelta(days=1)
+    return today_draw
+
+def format_time_left(td: timedelta) -> str:
+    total = int(td.total_seconds())
+    if total < 0:
+        total = 0
+    hours, rem = divmod(total, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}ч {minutes:02d}м"
+    if minutes > 0:
+        return f"{minutes}м {seconds:02d}с"
+    return f"{seconds}с"
+
+def draw_countdown_text() -> str:
+    nxt = next_draw_dt()
+    left = nxt - datetime.now(MSK_TZ)
+    return (
+        f"⏰ <b>Следующий розыгрыш</b> "
+        f"{nxt.strftime('%d.%m в %H:%M')} МСК\n"
+        f"⏳ Осталось <b>{format_time_left(left)}</b>"
+    )
+
+# ========== КОМАНДЫ ==========
 @dp.message(Command("timer"))
 async def cmd_timer(message: types.Message):
-    """Показать таймер до следующего розыгрыша."""
     await message.answer(draw_countdown_text(), parse_mode=ParseMode.HTML)
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    """Подробная инструкция по получению подарка."""
     text = (
         "ℹ️ <b>Как получить подарок</b>\n\n"
-        "Сначала жми /start и нажми кнопку «🎲 Бросить кубик» — бот покажет, "
-        "какой подарок тебе выпал. После этого пройди 3 шага воронки:\n\n"
-        "<b>Шаг 1️⃣ — Благодарность под исходным комментарием 📝</b>\n"
-        "Под комментарием, с которого ты узнал о нас, напиши короткую "
-        "благодарность (точный текст пришлю в моноширинном блоке — "
-        "его можно скопировать одним нажатием) и поставь лайк. "
-        "Затем пришли боту скриншот.\n\n"
-        "<b>Шаг 2️⃣ — Отметить бота под видео в ленте 🎯</b>\n"
-        "Найди в ленте <b>несколько популярных видео</b> и под каждым напиши комментарий "
-        "<b>с отметкой нашего бота</b> (готовый текст пришлю отдельным моноширинным блоком — "
-        "в Telegram его можно скопировать одним нажатием). "
-        f"Пришли боту <b>{REQUIRED_FEED_SCREENSHOTS} скриншотов</b> (можно одним альбомом; "
-        "на весь альбом бот ответит один раз).\n\n"
-        "<b>Шаг 3️⃣ — Подписка на канал 🔐</b>\n"
-        "Подпишись на закрытый канал по ссылке (или подай заявку на вступление — "
-        "бот это тоже засчитает) и нажми <b>«✅ Я подписался»</b>. "
-        "Можно также прислать скриншот подписки.\n\n"
-        "🎉 <b>Готово!</b> Ты в очереди на розыгрыш.\n\n"
-        "<b>Полезные команды:</b>\n"
+        "Жми /start и нажми кнопку Бросить кубик — бот покажет какой подарок тебе выпал\n\n"
+        "<b>Шаг 1 — Благодарность под комментарием</b>\n"
+        "Напиши под комментом откуда узнал о нас короткую благодарность "
+        "(точный текст пришлю — копируется одним нажатием) и поставь лайк. "
+        "Пришли скриншот\n\n"
+        "<b>Шаг 2 — Отметить бота в ленте</b>\n"
+        "Найди популярные видео и оставь комментарий с отметкой бота "
+        "(готовый текст пришлю отдельно). "
+        f"Пришли <b>{REQUIRED_FEED_SCREENSHOTS} скриншотов</b> можно одним альбомом\n\n"
+        "<b>Шаг 3 — Запустить бота и подписаться на канал</b>\n"
+        "Запусти бота по ссылке и подпишись на закрытый канал "
+        "(или подай заявку — бот засчитает) затем нажми Я подписался\n\n"
+        "🎉 <b>Готово</b> Ты в очереди на розыгрыш\n\n"
+        "<b>Команды</b>\n"
         "/start — начать или начать заново\n"
         "/timer — когда следующий розыгрыш\n"
         "/help — эта инструкция"
@@ -688,9 +737,17 @@ async def cmd_start(message: types.Message, state: FSMContext):
     username = message.from_user.username
     first_name = message.from_user.first_name
 
-    add_user(user_id, username, first_name)
+    # реферальная ссылка /start ref_12345
+    referrer_id = None
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            referrer_id = int(args[1].replace("ref_", ""))
+        except ValueError:
+            pass
 
-    # Сбрасываем прогресс воронки — даём пользователю начать с чистого листа
+    add_user(user_id, username, first_name, referrer_id)
+
     update_user(
         user_id,
         step=0,
@@ -705,10 +762,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="🎲 Бросить кубик", callback_data="roll_dice")],
         [InlineKeyboardButton(text="🔍 Посмотреть отзывы", url="https://t.me/PLGiftOTZ")]
     ])
-    welcome_text = (
-        "🎁 <b>Брось кубик и получи подарок</b> 👇🎁\n\n"
-        "Жми кнопку ниже!"
-    )
+    welcome_text = "🎁 <b>Брось кубик и получи подарок</b> 👇🎁\n\nЖми кнопку ниже"
     try:
         await message.answer_photo(
             photo=FSInputFile("PLGIFT.png"),
@@ -718,27 +772,19 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
     except Exception as e:
         logging.error(f"Не удалось отправить PLGIFT.png: {e}")
-        await message.answer(
-            welcome_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=welcome_kb,
-        )
+        await message.answer(welcome_text, parse_mode=ParseMode.HTML, reply_markup=welcome_kb)
 
 @dp.callback_query(F.data == "roll_dice", Funnel.start)
 async def roll_dice(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-
     dice_msg = await callback.message.answer_dice(emoji="🎲")
     await asyncio.sleep(2.5)
-
     result = dice_msg.dice.value
     gift = get_gift(result)
-
     update_user(user_id, step=1, dice_result=result)
     await state.set_state(Funnel.gift_shown)
-
     await callback.message.answer(
-        f"✅ <b>Успешно, ты успел!</b>\n"
+        f"✅ <b>Успешно ты успел</b>\n"
         f"Тебе выпал подарок\n\n"
         f"{gift['gift_link']}",
         parse_mode=ParseMode.HTML,
@@ -752,26 +798,22 @@ async def roll_dice(callback: types.CallbackQuery, state: FSMContext):
 async def show_gift(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     user = get_user(user_id)
-
     if not user:
         return
-
     result = user[4] or 1
     gift = get_gift(result)
     me = await bot.get_me()
-
     text = (
         f"<b>{gift['name']} #{gift['number']}</b>\n"
         f"выпущен ботом @{me.username}\n\n"
-        f"👤 <b>Владелец:</b> Подарочный ретранслятор 🤖\n"
-        f"🎩 <b>Модель:</b> {gift['model']} <code>{gift['rarity_model']}</code>\n"
-        f"🎨 <b>Узор:</b> {gift['pattern']} <code>{gift['rarity_pattern']}</code>\n"
-        f"🌈 <b>Фон:</b> {gift['background']} <code>{gift['rarity_bg']}</code>\n"
-        f"📦 <b>Количество:</b> {gift['total']:,}, выпущено {gift['issued']:,}\n"
-        f"💰 <b>Ценность:</b> <code>{gift['value']}</code> "
+        f"👤 <b>Владелец</b> Подарочный ретранслятор 🤖\n"
+        f"🎩 <b>Модель</b> {gift['model']} <code>{gift['rarity_model']}</code>\n"
+        f"🎨 <b>Узор</b> {gift['pattern']} <code>{gift['rarity_pattern']}</code>\n"
+        f"🌈 <b>Фон</b> {gift['background']} <code>{gift['rarity_bg']}</code>\n"
+        f"📦 <b>Количество</b> {gift['total']:,} выпущено {gift['issued']:,}\n"
+        f"💰 <b>Ценность</b> <code>{gift['value']}</code> "
         f"<a href='{gift['gift_link']}'>подробнее</a>"
     )
-
     await callback.message.answer(
         text,
         parse_mode=ParseMode.HTML,
@@ -781,30 +823,27 @@ async def show_gift(callback: types.CallbackQuery):
         ])
     )
 
-# ========== 50 фраз для благодарности под исходным комментарием (задание 1) ==========
 RANDOM_COMMENTS_50 = [
-    "хахах, работает… спасибо 😄",
-    "лол, думал воздухан — а оно реально",
-    "+ работает, лайк автору",
-    "не верил, но сработало… респект",
-    "плюсую, тема живая — спасибо",
-    "проверил(а) лично — всё ок",
-    "коротко: работает. спасибо",
-    "не скам (проверено) — благодарю",
-    "сработало, забрал(а) — спасибо",
-    "всё честно, без приколов — спасибо",
+    "хахах работает спасибо",
+    "лол думал воздухан а оно реально",
+    "работает лайк автору",
+    "не верил но сработало респект",
+    "плюсую тема живая спасибо",
+    "проверил всё ок",
+    "коротко работает спасибо",
+    "не скам проверено благодарю",
+    "сработало забрал спасибо",
+    "всё честно без приколов спасибо",
 ]
 
 @dp.callback_query(F.data == "step1_comment")
 async def step1_comment(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-
     comment = random.choice(RANDOM_COMMENTS_50)
     update_user(user_id, step=1, comment_text=comment)
-
     await callback.message.answer(
         f"📊 <b>Шаг 1 из 3</b>  ⬜⬜⬜\n\n"
-        f"1️⃣ Напиши под тем комментом, откуда узнал о нас, вот это (скопируй):\n"
+        f"1️⃣ Напиши под тем комментом откуда узнал о нас вот это (скопируй):\n"
         f"{quote_code(comment)}\n\n"
         f"Поставь лайк и скинь сюда скриншот ✅",
         parse_mode=ParseMode.HTML
@@ -812,39 +851,34 @@ async def step1_comment(callback: types.CallbackQuery):
 
 @dp.message(F.photo, Funnel.gift_shown)
 async def screenshot_step1(message: types.Message, state: FSMContext):
-    """Шаг 1 → Шаг 2: получили скрин первого комментария."""
     await try_react_heart(message)
     user_id = message.from_user.id
     user = get_user(user_id)
     if not user:
         await message.answer("❌ Сначала нажми /start")
         return
-
     step1_comment = user[5]
     bot_comment = random.choice(COMMENTS_50)
     update_user(user_id, step=2, screenshots_count=0, comment_text=bot_comment)
     await state.set_state(Funnel.feed_comments)
     increment_stat("step1_done")
-
     add_notification(
-        f"📝 Новый комментарий (шаг 1)!\n"
-        f"ID: {user_id}\n"
-        f"Юзер: @{message.from_user.username or 'нет'}\n"
-        f"Текст: {step1_comment}"
+        f"Новый комментарий шаг 1\n"
+        f"ID {user_id}\n"
+        f"Юзер @{message.from_user.username or 'нет'}\n"
+        f"Текст {step1_comment}"
     )
-
     await message.answer(
         f"📊 <b>Шаг 2 из 3</b>  ✅⬜⬜\n\n"
-        f"✅ <b>Принял!</b>\n\n"
-        f"2️⃣ Теперь в ленте TikTok найди популярные видео и оставь коммент с отметкой бота.\n"
+        f"✅ <b>Принял</b>\n\n"
+        f"2️⃣ В ленте TikTok найди популярные видео и оставь коммент с отметкой бота\n"
         f"Текст (скопируй):\n{quote_code(bot_comment)}\n\n"
-        f"📩 Скинь <b>{REQUIRED_FEED_SCREENSHOTS}</b> скринов (можно альбомом).",
+        f"📩 Скинь <b>{REQUIRED_FEED_SCREENSHOTS}</b> скринов можно альбомом",
         parse_mode=ParseMode.HTML
     )
 
 @dp.message(F.photo, Funnel.feed_comments)
 async def screenshot_step2(message: types.Message, state: FSMContext):
-    """Шаг 2: счётчик скринов в БД; альбом — несколько фото, одно ответное сообщение."""
     await try_react_heart(message)
     user_id = message.from_user.id
     user = get_user(user_id)
@@ -856,167 +890,144 @@ async def screenshot_step2(message: types.Message, state: FSMContext):
         return
     await _run_step2_after_photos(message, state, user_id, 1)
 
-# ========== ТАЙМЕР ДО СЛЕДУЮЩЕГО РОЗЫГРЫША ==========
-MSK_TZ = timezone(timedelta(hours=3))
-DRAW_HOUR_MSK = 21  # ежедневный розыгрыш в 21:00 МСК
-
-def next_draw_dt() -> datetime:
-    """Возвращает datetime следующего розыгрыша в МСК."""
-    now = datetime.now(MSK_TZ)
-    today_draw = now.replace(hour=DRAW_HOUR_MSK, minute=0, second=0, microsecond=0)
-    if now >= today_draw:
-        return today_draw + timedelta(days=1)
-    return today_draw
-
-def format_time_left(td: timedelta) -> str:
-    """'5ч 23м' или '47м 12с' — компактный человекочитаемый формат."""
-    total = int(td.total_seconds())
-    if total < 0:
-        total = 0
-    hours, rem = divmod(total, 3600)
-    minutes, seconds = divmod(rem, 60)
-    if hours > 0:
-        return f"{hours}ч {minutes:02d}м"
-    if minutes > 0:
-        return f"{minutes}м {seconds:02d}с"
-    return f"{seconds}с"
-
-def draw_countdown_text() -> str:
-    """Готовая строка с временем следующего розыгрыша."""
-    nxt = next_draw_dt()
-    left = nxt - datetime.now(MSK_TZ)
-    return (
-        f"⏰ <b>Следующий розыгрыш:</b> "
-        f"{nxt.strftime('%d.%m в %H:%M')} МСК\n"
-        f"⏳ Осталось: <b>{format_time_left(left)}</b>"
-    )
-
-# ========== ХЕЛПЕР: ЗАВЕРШЕНИЕ ВОРОНКИ ==========
+# ========== ФИНАЛ ВОРОНКИ ==========
 async def finalize_funnel(user_id: int, username: str | None, state: FSMContext, send):
-    """Помечает пользователя как завершившего воронку и шлёт финальное сообщение."""
     update_user(user_id, step=4, joined_channel=1)
     await state.set_state(Funnel.completed)
     increment_stat("step3_done")
     increment_stat("completed")
 
     me = await bot.get_me()
-    share_text = "Получи реальный подарок из Telegram! 🎁"
-    share_url = f"https://t.me/{me.username}"
+    ref_link = f"https://t.me/{me.username}?start=ref_{user_id}"
+    share_text = "Получи реальный подарок из Telegram 🎁"
+    invited = get_invited_count(user_id)
 
-    text = "🎉 <b>Все задания выполнены!</b>\n\n<b>Выполнено ✅</b>\n\n"
-    text += "⏳ <b>Ты в очереди на получение подарка!</b>\n"
+    text = "🎉 <b>Все задания выполнены</b>\n\n✅ <b>Выполнено</b>\n\n"
+    text += "⏳ <b>Ты в очереди на получение подарка</b>\n"
     text += draw_countdown_text() + "\n\n"
-    text += "👥 <b>Пригласи друга — получи дополнительный шанс!</b>"
+    text += (
+        f"👥 <b>Пригласи 2 друзей — получи звёзды ⭐</b>\n"
+        f"Твоя ссылка:\n<code>{ref_link}</code>\n"
+        f"Приглашено: <b>{invited}/2</b>"
+    )
 
     keyboard = [
         [InlineKeyboardButton(
             text="📤 Пригласить друга",
-            url=f"https://t.me/share/url?url={share_url}&text={share_text}"
+            url=f"https://t.me/share/url?url={ref_link}&text={share_text}"
         )],
         [InlineKeyboardButton(text="🎲 Бросить ещё раз", callback_data="play_again")],
     ]
 
-    sponsor_links: list[str] = [PROFIT_LABB_BOT_LINK, *(SPONSOR_LINKS or [])]
-    sponsor_links = list(dict.fromkeys([l for l in sponsor_links if l]))
+    sponsor_rows = get_sponsor_links()
 
-    if sponsor_links:
-        text += "\n\n🎁 <b>Бонусы:</b>\nЗапусти бота и забери дополнительные призы!"
-        sponsor_block: list[list[InlineKeyboardButton]] = []
-        for link in sponsor_links:
-            if "t.me/profitt_labb_bot" in link:
-                sponsor_block.append([InlineKeyboardButton(text="Запустить бота", url=link)])
-            else:
-                sponsor_block.append([InlineKeyboardButton(text="🎁 Бонус от спонсора", url=link)])
+    if sponsor_rows:
+        text += "\n\n🎁 <b>Бонусы от спонсоров</b>"
+        sponsor_block = [
+            [InlineKeyboardButton(text=label, url=url)]
+            for label, url in sponsor_rows
+        ]
         keyboard = sponsor_block + keyboard
 
-    await send(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
-    )
+    await send(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
     add_notification(
-        f"✅ Пользователь завершил все задания!\n"
-        f"ID: {user_id}\n"
-        f"Юзер: @{username or 'нет'}\n"
-        f"В канале: ✅"
+        f"Пользователь завершил все задания\n"
+        f"ID {user_id}\n"
+        f"Юзер @{username or 'нет'}"
     )
 
 async def _send_not_subscribed(send):
     await send(
-        "❌ <b>Пока не вижу подписки или заявки в канал.</b>\n\n"
-        "Вступи в один из наших каналов по ссылке или подай заявку на вступление — "
-        "бот зафиксирует заявку и пропустит дальше.\n"
-        "Затем снова нажми <b>«✅ Я подписался»</b>.",
+        "❌ <b>Пока не вижу подписки или запуска бота</b>\n\n"
+        "Запусти бота по ссылке и вступи в канал затем нажми Я подписался",
         parse_mode=ParseMode.HTML,
         reply_markup=subscription_reply_markup(),
     )
 
 @dp.callback_query(F.data == "check_sub", Funnel.subscribed)
 async def check_sub_callback(callback: types.CallbackQuery, state: FSMContext):
-    """Авто-проверка подписки на канал по нажатию кнопки."""
     user_id = callback.from_user.id
     is_member = await check_force_sub_satisfied(user_id)
-
     if not is_member:
-        await callback.answer("Подписка не найдена 🙁", show_alert=True)
+        await callback.answer("Подписка не найдена", show_alert=True)
         await _send_not_subscribed(callback.message.answer)
         return
-
     await callback.answer("Подписка подтверждена ✅", show_alert=False)
     await finalize_funnel(user_id, callback.from_user.username, state, callback.message.answer)
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub_wrong_state(callback: types.CallbackQuery):
-    """Кнопка нажата не на шаге 3 — даём подсказку по текущему шагу."""
     user = get_user(callback.from_user.id)
     await callback.answer()
     if user:
         await send_step_hint(callback, user)
 
-
 @dp.chat_join_request()
 async def on_chat_join_request(join: ChatJoinRequest):
-    """Каналы с заявками: фиксируем заявку — check_force_sub_satisfied засчитает как успех."""
     cid = join.chat.id
     if cid not in FORCE_SUB_CHANNEL_IDS:
         return
     uid = join.from_user.id
     try:
         record_channel_join_request(uid, cid)
-        logging.info(f"chat_join_request: сохранена заявка user={uid} channel={cid}")
     except Exception:
-        logging.exception(f"chat_join_request: ошибка записи в БД user={uid} channel={cid}")
+        logging.exception(f"chat_join_request ошибка user={uid} channel={cid}")
 
 @dp.message(F.photo, Funnel.subscribed)
 async def screenshot_step3(message: types.Message, state: FSMContext):
-    """Шаг 3 → Финал: проверяем подписку и завершаем воронку (по скриншоту)."""
     await try_react_heart(message)
     user_id = message.from_user.id
     is_member = await check_force_sub_satisfied(user_id)
-
     if not is_member:
         await _send_not_subscribed(message.answer)
         return
-
     await finalize_funnel(user_id, message.from_user.username, state, message.answer)
 
-# ========== БРОСИТЬ ЕЩЁ РАЗ ==========
+# ========== ЕЖЕНЕДЕЛЬНАЯ РАССЫЛКА ЗВЁЗД ==========
+async def weekly_stars_broadcast():
+    """Каждое воскресенье в 12:00 МСК — рассылка пользователям приглашавшим 2+ друзей."""
+    while True:
+        now = datetime.now(MSK_TZ)
+        # следующее воскресенье 12:00
+        days_until_sunday = (6 - now.weekday()) % 7
+        if days_until_sunday == 0 and now.hour >= 12:
+            days_until_sunday = 7
+        next_sunday = now.replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=days_until_sunday)
+        wait_sec = (next_sunday - now).total_seconds()
+        await asyncio.sleep(wait_sec)
+
+        users = get_all_completed_users()
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        for uid in users:
+            c.execute("SELECT invited_count, stars_rewarded FROM users WHERE user_id=?", (uid,))
+            row = c.fetchone()
+            if not row:
+                continue
+            invited, rewarded = row
+            if invited >= 2 and not rewarded:
+                try:
+                    await bot.send_message(
+                        uid,
+                        "⭐ <b>Ты пригласил 2 друзей</b>\n\n"
+                        "Тебе начислены звёзды как бонус\n"
+                        "Спасибо что распространяешь нас",
+                        parse_mode=ParseMode.HTML,
+                    )
+                    c.execute("UPDATE users SET stars_rewarded=1 WHERE user_id=?", (uid,))
+                except Exception:
+                    pass
+        conn.commit()
+        conn.close()
+
+# ========== PLAY AGAIN ==========
 @dp.callback_query(F.data == "play_again")
 async def play_again(callback: types.CallbackQuery, state: FSMContext):
-    """Сбрасывает прогресс и предлагает бросить кубик снова."""
     user_id = callback.from_user.id
-    update_user(
-        user_id,
-        step=0,
-        dice_result=None,
-        screenshots_count=0,
-        joined_channel=0,
-        comment_text=None,
-    )
+    update_user(user_id, step=0, dice_result=None, screenshots_count=0, joined_channel=0, comment_text=None)
     await state.set_state(Funnel.start)
     await callback.answer("Прогресс сброшен 🔄")
-
     welcome_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎲 Бросить кубик", callback_data="roll_dice")],
         [InlineKeyboardButton(text="🔍 Посмотреть отзывы", url="https://t.me/PLGiftOTZ")],
@@ -1024,25 +1035,21 @@ async def play_again(callback: types.CallbackQuery, state: FSMContext):
     try:
         await callback.message.answer_photo(
             photo=FSInputFile("PLGIFT.png"),
-            caption=(
-                "🎁 <b>Брось кубик и получи подарок</b> 👇🎁\n\n"
-                "Жми кнопку ниже!"
-            ),
+            caption="🎁 <b>Брось кубик и получи подарок</b> 👇🎁\n\nЖми кнопку ниже",
             parse_mode=ParseMode.HTML,
             reply_markup=welcome_kb,
         )
     except Exception as e:
-        logging.error(f"play_again: не удалось отправить PLGIFT.png: {e}")
+        logging.error(f"play_again не удалось отправить PLGIFT.png: {e}")
         await callback.message.answer(
-            "🎁 <b>Брось кубик и получи подарок</b> 👇🎁\n\nЖми кнопку ниже!",
+            "🎁 <b>Брось кубик и получи подарок</b> 👇🎁\n\nЖми кнопку ниже",
             parse_mode=ParseMode.HTML,
             reply_markup=welcome_kb,
         )
 
-# ========== FALLBACK: ловим всё, что не подошло под состояние ==========
+# ========== FALLBACK ==========
 @dp.callback_query(F.data == "roll_dice")
 async def roll_dice_already(callback: types.CallbackQuery):
-    """Кубик уже бросал — повторно не даём."""
     await callback.answer(
         "Ты уже бросал кубик 🎲\nЕсли хочешь начать сначала — отправь /start",
         show_alert=True,
@@ -1052,7 +1059,6 @@ async def roll_dice_already(callback: types.CallbackQuery):
 
 @dp.message(F.photo)
 async def photo_unexpected(message: types.Message):
-    """Скрин получен, но шаг не тот — подсказываем, что вообще ждём."""
     user = get_user(message.from_user.id)
     if not user:
         await message.answer("❌ Сначала нажми /start")
@@ -1061,24 +1067,19 @@ async def photo_unexpected(message: types.Message):
 
 @dp.message()
 async def message_fallback(message: types.Message):
-    """Любой другой текст/стикер/что угодно — мягкая подсказка."""
     user = get_user(message.from_user.id)
     if not user:
-        await message.answer(
-            "👋 Привет! Чтобы участвовать — нажми /start",
-            parse_mode=ParseMode.HTML,
-        )
+        await message.answer("👋 Привет Чтобы участвовать — нажми /start", parse_mode=ParseMode.HTML)
         return
     await send_step_hint(message, user)
 
 USER_COMMANDS = [
-    BotCommand(command="start", description="🎁 Начать (или начать заново)"),
+    BotCommand(command="start", description="🎁 Начать или начать заново"),
     BotCommand(command="timer", description="⏰ Когда следующий розыгрыш"),
     BotCommand(command="help", description="ℹ️ Как получить подарок"),
 ]
 
 async def setup_user_menu():
-    """Меню команд при вводе '/' — для всех пользователей бота."""
     try:
         await bot.set_my_commands(USER_COMMANDS)
     except Exception as e:
@@ -1089,7 +1090,8 @@ async def main():
     init_db()
     await setup_user_menu()
     me = await bot.get_me()
-    print(f"✅ Основной бот запущен: @{me.username}")
+    print(f"✅ Основной бот запущен @{me.username}")
+    asyncio.create_task(weekly_stars_broadcast())
     allowed = list(dp.resolve_used_update_types())
     if "chat_join_request" not in allowed:
         allowed.append("chat_join_request")
